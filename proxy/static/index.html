@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>内网门户 · 缓存代理演示</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #182033; --panel2: #1f2a42;
+    --line: #2b3858; --text: #e6ebf5; --muted: #93a0bc;
+    --accent: #5b8def; --green: #3fbf7f; --red: #e56060;
+    --amber: #e0a83d; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { padding: 18px 26px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: 400px 1fr; gap: 18px; padding: 18px 26px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; color: var(--accent);
+    text-transform: uppercase; letter-spacing: .06em; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  select, input { width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; font-size: 13px; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
+    padding: 9px 14px; font-size: 13px; cursor: pointer; margin-top: 12px; }
+  button.secondary { background: var(--panel2); border: 1px solid var(--line); color: var(--text); }
+  button.danger { background: var(--red); }
+  button.warn { background: var(--amber); color: #1a1a1a; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btns button { margin-top: 8px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; }
+  .pill.hit { background: rgba(63,191,127,.18); color: var(--green); }
+  .pill.miss { background: rgba(91,141,239,.2); color: var(--accent); }
+  .pill.bypass { background: rgba(224,168,61,.2); color: var(--amber); }
+  .pill.err { background: rgba(229,96,96,.2); color: var(--red); }
+  pre { background: #0b1020; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; overflow: auto; max-height: 340px; font: 12px/1.55 var(--mono); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.mono, .mono { font-family: var(--mono); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 10px; font-size: 12px; }
+  .kv b { color: var(--muted); font-weight: 500; }
+  .note { font-size: 12px; color: var(--muted); background: var(--panel2);
+    border-left: 3px solid var(--accent); padding: 8px 10px; border-radius: 0 6px 6px 0;
+    margin-top: 10px; }
+  .tag-true { color: var(--red); font-weight: 700; }
+  .tag-false { color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .statusline { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .flow { font: 12px var(--mono); color: var(--muted); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>内网门户公告 · 单进程缓存代理</h1>
+  <span class="sub">FastAPI + httpx · 仅代理 <span class="mono">GET /notices/{id}</span> · 缓存键 = 公告 ID + Accept-Language</span>
+</header>
+
+<main>
+  <!-- ============ 左列：请求与上游控制 ============ -->
+  <div>
+    <section class="panel">
+      <h2>① 发起请求</h2>
+      <label>公告 ID</label>
+      <select id="noticeId">
+        <option>1</option><option>2</option><option>3</option>
+        <option>404-missing</option>
+      </select>
+
+      <label>语言（Accept-Language）</label>
+      <select id="lang">
+        <option value="zh-CN,zh;q=0.9">中文（zh-CN,zh;q=0.9）</option>
+        <option value="en-US,en;q=0.9">English（en-US,en;q=0.9）</option>
+        <option value="">（不发送该头）</option>
+      </select>
+
+      <label>演示身份</label>
+      <select id="identity">
+        <option value="anon">匿名（无 Cookie / Authorization，走缓存）</option>
+        <option value="cookie">携带 Cookie（直连，绕过缓存）</option>
+        <option value="auth">携带 Authorization: Bearer（直连，绕过缓存）</option>
+        <option value="both">同时携带 Cookie + Authorization</option>
+      </select>
+      <div class="statusline" id="cookieStatus"></div>
+
+      <div class="btns">
+        <button id="sendBtn">发送请求</button>
+        <button class="secondary" id="burstBtn">并发 6 个同键请求</button>
+        <button class="secondary" id="clearCookieBtn">清除本地 Cookie</button>
+      </div>
+      <div class="note">
+        响应头 <b>X-Cache</b>：HIT 命中 / MISS 首次未命中且已缓存 /
+        MISS-NO-CACHE 未命中但不可缓存 / MISS-WAIT 合并等待 / BYPASS 带身份直连 / ERROR 上游失败。
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>② 按公告清除缓存（全部语言）</h2>
+      <div class="row">
+        <div>
+          <label>要清除的公告 ID</label>
+          <input id="purgeId" value="1" />
+        </div>
+      </div>
+      <div class="btns">
+        <button class="warn" id="purgeBtn">POST /proxy/purge/{id}</button>
+        <button class="secondary" id="purgeInFlightBtn">清除中并发演示（在途清除）</button>
+        <button class="danger" id="proxyResetBtn">清空代理全部缓存</button>
+      </div>
+      <div class="note">
+        清除后：该公告所有语言的缓存条目立即失效；清除前已在途的响应即使晚返回也
+        <b>不会回填</b>；清除后的新请求会重新请求上游，<b>不复用旧在途结果</b>。
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>③ 本地上游控制</h2>
+      <div class="row">
+        <div>
+          <label>响应类型</label>
+          <select id="upProfile">
+            <option value="public">public（可缓存公开公告）</option>
+            <option value="personal">personal（Set-Cookie + private,no-store）</option>
+          </select>
+        </div>
+        <div>
+          <label>失败模式</label>
+          <select id="upFailure">
+            <option value="none">正常</option>
+            <option value="error500">返回 500</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>人工延迟（毫秒）</label>
+          <input id="upLatency" type="number" value="200" min="0" step="50" />
+        </div>
+        <div>
+          <label>public 时 max-age（秒）</label>
+          <input id="upMaxAge" type="number" value="30" min="0" />
+        </div>
+      </div>
+      <label>仅对此公告生效（留空 = 全局默认）</label>
+      <input id="upScopeNotice" placeholder="例如 1；留空应用到所有公告" />
+      <div class="btns">
+        <button id="applyUpstream">应用上游配置</button>
+        <button class="secondary" id="resetUpstream">重置上游与统计</button>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <button class="secondary" id="presetPublic">预设：公开可缓存</button>
+        <button class="secondary" id="presetPersonal">预设：个人页面</button>
+        <button class="secondary" id="presetFail">预设：失败 500</button>
+        <button class="secondary" id="presetSlow">预设：高延迟 3s</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 右列：结果与状态 ============ -->
+  <div>
+    <section class="panel">
+      <h2>④ 最近一次响应</h2>
+      <div id="respMeta" class="muted">尚未发送请求。</div>
+      <div style="margin-top:10px"><pre id="respBody">（空）</pre></div>
+      <div style="margin-top:10px"><pre id="respHeaders">（空）</pre></div>
+    </section>
+
+    <section class="panel">
+      <h2>⑤ 代理内部状态（缓存 / 在途 / 代际）
+        <button class="secondary" style="float:right;margin-top:-4px" id="refreshState">刷新</button>
+      </h2>
+      <div class="grid2">
+        <div>
+          <div class="muted">缓存条目（过期条目惰性移除，绝不复用）</div>
+          <table id="cacheTable">
+            <thead><tr><th>公告</th><th>语言</th><th>状态</th><th>剩余(s)</th><th>代际</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <div class="muted">在途请求（同键合并单元）</div>
+          <table id="inflightTable">
+            <thead><tr><th>公告</th><th>语言</th><th>等待回调</th><th>已清除标记</th><th>代际</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <pre id="rawState" style="margin-top:10px;max-height:200px"></pre>
+    </section>
+
+    <section class="panel">
+      <h2>⑥ 上游实际收到的请求（验证缓存 / 合并 / 绕过）
+        <button class="secondary" style="float:right;margin-top:-4px" id="refreshUpstream">刷新</button>
+      </h2>
+      <div id="upCounters" class="statusline"></div>
+      <table id="upstreamTable" style="margin-top:8px">
+        <thead><tr>
+          <th>时间</th><th>请求ID</th><th>公告</th><th>语言</th>
+          <th>Cookie</th><th>Auth</th><th>类型</th><th>失败</th><th>耗时ms</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function refreshCookieStatus() {
+  $("cookieStatus").textContent =
+    "当前浏览器 document.cookie：" + (document.cookie || "（无）");
+}
+
+function identityHeaders() {
+  const mode = $("identity").value;
+  const h = {};
+  if (mode === "cookie" || mode === "both") {
+    h["Cookie"] = "SID=employee-42; role=staff";
+    document.cookie = "demo_cookie=employee-42; path=/; SameSite=Lax";
+  }
+  if (mode === "auth" || mode === "both") {
+    h["Authorization"] = "Bearer demo-token-abc123";
+  }
+  return h;
+}
+
+function pillFor(xCache) {
+  const map = { HIT: "hit", MISS: "miss", "MISS-WAIT": "miss",
+    "MISS-NO-CACHE": "bypass", BYPASS: "bypass", ERROR: "err" };
+  const cls = map[xCache] || "err";
+  return `<span class="pill ${cls}">${xCache || "?"}</span>`;
+}
+
+async function doFetch(label) {
+  const id = $("noticeId").value;
+  const lang = $("lang").value;
+  const headers = identityHeaders();
+  if (lang) headers["Accept-Language"] = lang;
+  const t0 = performance.now();
+  let resp, text;
+  try {
+    resp = await fetch(`/notices/${encodeURIComponent(id)}`, { headers });
+    text = await resp.text();
+  } catch (e) {
+    $("respMeta").innerHTML =
+      `${label} <span class="pill err">NETWORK ERROR</span> ${e}`;
+    return null;
+  }
+  const ms = Math.round(performance.now() - t0);
+  const xCache = resp.headers.get("X-Cache") || "?";
+  const reason = resp.headers.get("X-Cache-Reason") || "";
+  let pretty = text;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (_) {}
+  $("respMeta").innerHTML =
+    `${label} · 状态 <b>${resp.status}</b> · 耗时 ${ms} ms · ${pillFor(xCache)}
+     <span class="muted">${reason}</span>`;
+  $("respBody").textContent = pretty;
+  const hdr = [];
+  resp.headers.forEach((v, k) => hdr.push(`${k}: ${v}`));
+  $("respHeaders").textContent = hdr.join("\n");
+  refreshCookieStatus();
+  return resp;
+}
+
+async function refreshState() {
+  const s = await (await fetch("/proxy/state")).json();
+  const ct = $("cacheTable").querySelector("tbody");
+  ct.innerHTML = s.cache.length ? s.cache.map(c =>
+    `<tr><td class="mono">${c.notice_id}</td>
+     <td class="mono">${c.accept_language || "〈none〉"}</td>
+     <td>${c.status_code}</td><td>${c.remaining_seconds}</td>
+     <td>${c.generation}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="muted">（空）</td></tr>`;
+  const it = $("inflightTable").querySelector("tbody");
+  it.innerHTML = s.inflight.length ? s.inflight.map(i =>
+    `<tr><td class="mono">${i.notice_id}</td>
+     <td class="mono">${i.accept_language || "〈none〉"}</td>
+     <td>${i.waiters}</td>
+     <td class="${i.purged ? "tag-true" : "tag-false"}">${i.purged}</td>
+     <td>${i.generation}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="muted">（无在途）</td></tr>`;
+  $("rawState").textContent = JSON.stringify(s, null, 2);
+}
+
+async function refreshUpstream() {
+  const [st, reqs] = await Promise.all([
+    (await fetch("/proxy/upstream/state")).json(),
+    (await fetch("/proxy/upstream/requests")).json(),
+  ]);
+  $("upCounters").textContent =
+    `上游总请求数：${st.counters.total_requests} · 按公告：` +
+    JSON.stringify(st.counters.by_notice) +
+    ` · 按类型：` + JSON.stringify(st.counters.by_profile) +
+    ` · content_version=${st.content_version}`;
+  const tb = $("upstreamTable").querySelector("tbody");
+  tb.innerHTML = reqs.requests.length ? reqs.requests.map(r =>
+    `<tr><td class="mono">${r.ts}</td><td class="mono">${r.request_id}</td>
+     <td>${r.notice_id}</td><td>${r.language}</td>
+     <td class="${r.has_cookie ? "tag-true" : "tag-false"}">${r.has_cookie}</td>
+     <td class="${r.has_authorization ? "tag-true" : "tag-false"}">${r.has_authorization}</td>
+     <td>${r.profile}</td><td>${r.failure}</td><td>${r.elapsed_ms}</td></tr>`
+  ).join("") : `<tr><td colspan="9" class="muted">（上游尚未收到请求）</td></tr>`;
+}
+
+async function applyUpstreamConfig(extra) {
+  const body = Object.assign({
+    profile: $("upProfile").value,
+    failure: $("upFailure").value,
+    latency_ms: Number($("upLatency").value),
+    max_age: Number($("upMaxAge").value),
+  }, extra || {});
+  const scope = $("upScopeNotice").value.trim();
+  if (scope) body.notice_id = scope;
+  const r = await fetch("/proxy/upstream/config", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json();
+  await Promise.all([refreshUpstream(), refreshState()]);
+  return data;
+}
+
+$("sendBtn").onclick = async () => {
+  await doFetch("单次请求");
+  await Promise.all([refreshState(), refreshUpstream()]);
+};
+
+$("burstBtn").onclick = async () => {
+  const id = $("noticeId").value;
+  const lang = $("lang").value;
+  const headers = identityHeaders();
+  if (lang) headers["Accept-Language"] = lang;
+  const t0 = performance.now();
+  const results = await Promise.all(Array.from({ length: 6 }, (_, i) =>
+    fetch(`/notices/${encodeURIComponent(id)}`, { headers })
+      .then(async r => ({ i, status: r.status,
+        xCache: r.headers.get("X-Cache"),
+        rid: r.headers.get("X-Upstream-Request-Id") }))
+      .catch(e => ({ i, error: String(e) }))
+  ));
+  const ms = Math.round(performance.now() - t0);
+  $("respMeta").innerHTML =
+    `并发 6 个同键请求完成，总耗时 ${ms} ms（若上游延迟 2s，这里应≈2s 而非 12s）`;
+  $("respBody").textContent = JSON.stringify(results, null, 2);
+  $("respHeaders").textContent =
+    "若上游请求表中只有 1 条对应请求，且仅 1 个 MISS、其余 MISS-WAIT，即合并成功。";
+  await Promise.all([refreshState(), refreshUpstream()]);
+};
+
+$("purgeBtn").onclick = async () => {
+  const id = $("purgeId").value.trim();
+  const r = await fetch(`/proxy/purge/${encodeURIComponent(id)}`, { method: "POST" });
+  const data = await r.json();
+  $("respMeta").innerHTML = `清除完成 <span class="pill bypass">PURGE</span>`;
+  $("respBody").textContent = JSON.stringify(data, null, 2);
+  $("respHeaders").textContent =
+    "purged_cache_entries = 删除的缓存条目数；marked_inflight = 被标记禁止回填的在途单元数。";
+  await Promise.all([refreshState(), refreshUpstream()]);
+};
+
+// 在途清除演示：先把延迟拉高 -> 并发发起 3 个请求 -> 立刻清除 -> 观察：
+// 在途单元 purged=true；其完成后不回填；清除后再请求得到全新上游请求。
+$("purgeInFlightBtn").onclick = async () => {
+  const id = $("purgeId").value.trim() || "1";
+  $("noticeId").value = id;
+  await applyUpstreamConfig({ latency_ms: 2500, profile: "public", failure: "none" });
+  const lang = $("lang").value;
+  const mk = () => fetch(`/notices/${encodeURIComponent(id)}`,
+    { headers: lang ? { "Accept-Language": lang } : {} });
+  const t0 = performance.now();
+  const inflight = Promise.all([mk(), mk(), mk()]);
+  await new Promise(r => setTimeout(r, 300));
+  await refreshState(); // 应看到 1 个在途单元
+  const purge = await (await fetch(`/proxy/purge/${encodeURIComponent(id)}`,
+    { method: "POST" })).json();
+  const beforeDone = await inflight;
+  const after = await mk(); // 清除后的新请求：必须重新打上游
+  const ms = Math.round(performance.now() - t0);
+  const before = await Promise.all(beforeDone.map(async r => ({
+    status: r.status, xCache: r.headers.get("X-Cache"),
+    rid: r.headers.get("X-Upstream-Request-Id") })));
+  $("respMeta").innerHTML =
+    `在途清除演示完成（${ms} ms）：旧在途 ${before.length} 个等待者已拿到当时的响应，` +
+    `但缓存未回填；清除后的新请求 X-Cache=${after.headers.get("X-Cache")}`;
+  $("respBody").textContent = JSON.stringify(
+    { purge_result: purge, before_purge_completions: before,
+      after_purge_request: { status: after.status,
+        xCache: after.headers.get("X-Cache"),
+        rid: after.headers.get("X-Upstream-Request-Id") } }, null, 2);
+  await Promise.all([refreshState(), refreshUpstream()]);
+};
+
+$("clearCookieBtn").onclick = () => {
+  document.cookie.split(";").forEach(c => {
+    const name = c.split("=")[0].trim();
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  });
+  refreshCookieStatus();
+};
+
+$("applyUpstream").onclick = () => applyUpstreamConfig();
+$("resetUpstream").onclick = async () => {
+  await fetch("/proxy/upstream/reset", { method: "POST" });
+  await fetch("/proxy/reset", { method: "POST" });
+  $("upProfile").value = "public"; $("upFailure").value = "none";
+  $("upLatency").value = 200; $("upMaxAge").value = 30; $("upScopeNotice").value = "";
+  await Promise.all([refreshUpstream(), refreshState()]);
+};
+$("proxyResetBtn").onclick = async () => {
+  const data = await (await fetch("/proxy/reset", { method: "POST" })).json();
+  $("respMeta").innerHTML = `<span class="pill err">RESET</span> 代理缓存已清空`;
+  $("respBody").textContent = JSON.stringify(data, null, 2);
+  $("respHeaders").textContent = "代际计数保留；缓存与在途单元全部清空。";
+  await refreshState();
+};
+const preset = (p) => $("applyUpstream").onclick;
+$("presetPublic").onclick = () => {
+  $("upProfile").value = "public"; $("upFailure").value = "none";
+  $("upLatency").value = 200; $("upMaxAge").value = 30;
+  return applyUpstreamConfig();
+};
+$("presetPersonal").onclick = () => {
+  $("upProfile").value = "personal";
+  return applyUpstreamConfig();
+};
+$("presetFail").onclick = () => {
+  $("upFailure").value = "error500";
+  return applyUpstreamConfig();
+};
+$("presetSlow").onclick = () => {
+  $("upLatency").value = 3000;
+  return applyUpstreamConfig();
+};
+$("refreshState").onclick = refreshState;
+$("refreshUpstream").onclick = refreshUpstream;
+
+refreshCookieStatus();
+refreshState();
+refreshUpstream();
+setInterval(() => { refreshState(); refreshUpstream(); }, 4000);
+</script>
+</body>
+</html>

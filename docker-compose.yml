@@ -1,0 +1,35 @@
+services:
+  proxy:
+    build: .
+    image: notice-cache-proxy:latest
+    command: >
+      uvicorn proxy.app:app --host 0.0.0.0 --port 8000
+    environment:
+      # 上游固定，仅指向本地上游服务
+      UPSTREAM_BASE: http://upstream:8001
+      UPSTREAM_TIMEOUT_SECONDS: "15"
+    ports:
+      - "8000:8000"
+    depends_on:
+      upstream:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  upstream:
+    build: .
+    image: notice-cache-proxy:latest
+    command: >
+      uvicorn upstream.app:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3).status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
